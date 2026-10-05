@@ -62,6 +62,41 @@ public class HabitsController {
         return m;
     }
 
+    @GetMapping("/v1/challenges")
+    public Map<String, Object> challenges(@RequestHeader(value = "X-User-Id", required = false) String user) {
+        var mc = habits.challenges(userId(user));
+        return Map.of("month", mc.month().toString(), "challenges", mc.challenges().stream()
+                .map(c -> Map.of("code", c.code(), "title", c.title(), "description", c.description(), "target", c.target(),
+                        "progress", c.progress(), "completed", c.completed(), "points", c.points()))
+                .toList());
+    }
+
+    @GetMapping("/v1/wrapped")
+    public Map<String, Object> wrapped(@RequestHeader(value = "X-User-Id", required = false) String user,
+                                       @RequestParam(required = false) Integer year) {
+        var w = habits.wrapped(userId(user), year);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("year", w.year());
+        m.put("title", w.title());
+        m.put("monthsInvested", w.monthsInvested());
+        m.put("longestStreak", w.longestStreak());
+        m.put("purchases", w.purchases());
+        m.put("differentShares", w.differentShares());
+        m.put("invested", app.sprout.habits.domain.Money.rupees(w.investedPaise()));
+        if (w.topShare() != null) {
+            m.put("topShare", Map.of("symbol", w.topShare(), "purchases", w.topSharePurchases()));
+        }
+        m.put("planInstalments", w.planInstalments());
+        m.put("potPurchases", w.potPurchases());
+        m.put("challengesCompleted", w.challengesCompleted());
+        m.put("pointsEarned", w.pointsEarned());
+        if (w.firstPurchaseOn() != null) {
+            m.put("firstPurchaseOn", w.firstPurchaseOn().toString());
+        }
+        m.put("badges", w.badges());
+        return m;
+    }
+
     @PutMapping("/v1/habits/me/privacy")
     public Map<String, Object> privacy(@RequestHeader(value = "X-User-Id", required = false) String user, @RequestBody PrivacyRequest req) {
         if (req.showInvestedRange() == null) {

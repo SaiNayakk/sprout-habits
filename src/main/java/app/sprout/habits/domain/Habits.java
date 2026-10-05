@@ -61,6 +61,26 @@ public class Habits {
         return HabitEngine.picture(history.trades(user, opened, today), today);
     }
 
+    /** A month's challenges: the month is the market's (trade dates are sessions), not the wall clock's. */
+    public record MonthChallenges(java.time.YearMonth month, List<HabitEngine.Challenge> challenges) {}
+
+    public MonthChallenges challenges(UUID user) {
+        LocalDate today = history.today();
+        LocalDate opened = history.opened(user);
+        java.time.YearMonth month = java.time.YearMonth.from(today);
+        return new MonthChallenges(month, HabitEngine.challenges(history.trades(user, opened, today), month));
+    }
+
+    public HabitEngine.Wrapped wrapped(UUID user, Integer year) {
+        LocalDate today = history.today();
+        int y = year == null ? today.getYear() : year;
+        if (y > today.getYear()) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "That year hasn't happened yet.");
+        }
+        LocalDate opened = history.opened(user);
+        return HabitEngine.wrapped(history.trades(user, opened, today), y, today);
+    }
+
     public boolean setPrivacy(UUID user, boolean show) {
         db.sql("INSERT INTO privacy (user_id, show_invested_range) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET show_invested_range = ?")
                 .params(user, show, show).update();

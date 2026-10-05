@@ -127,6 +127,24 @@ class HabitsApiTest {
     }
 
     @Test
+    void thisMonthsChallengesAndTheYearWrapped() throws Exception {
+        UUID u = investor(5000, "2026-07", "2026-08", "2026-09", "2026-10");
+        JsonNode c = body(as(u, get("/v1/challenges")).andExpect(status().isOk()).andExpect(MATCHES_CONTRACT));
+        assertThat(c.path("month").asText()).as("the market's month").isEqualTo("2026-10");
+        assertThat(c.path("challenges").findValuesAsText("code")).containsExactly("INVEST_TWO_DAYS", "PLAN_ON_TRACK", "GROW_A_POT", "THREE_SHARES");
+        assertThat(c.path("challenges").get(0).path("progress").asInt()).as("one day so far").isEqualTo(1);
+        assertThat(c.path("challenges").findValues("completed")).allMatch(n -> !n.asBoolean());
+        JsonNode w = body(as(u, get("/v1/wrapped")).andExpect(status().isOk()).andExpect(MATCHES_CONTRACT));
+        assertThat(w.path("year").asInt()).isEqualTo(2026);
+        assertThat(w.path("monthsInvested").asInt()).isEqualTo(4);
+        assertThat(w.path("longestStreak").asInt()).isEqualTo(4);
+        assertThat(w.path("invested").asText()).isEqualTo("20000.00");
+        assertThat(w.path("topShare").path("symbol").asText()).isEqualTo("HARBOR");
+        assertThat(w.path("title").asText()).isEqualTo("First Shoots");
+        as(u, get("/v1/wrapped?year=2031")).andExpect(status().isBadRequest());
+    }
+
+    @Test
     void squadsRankByTheHabitNeverByMoneyAndShowRangesOnlyByChoice() throws Exception {
         UUID rich = investor(9_00_000, "2026-10");                                  // a lot of money, one month
         UUID steady = investor(1_000, "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10");

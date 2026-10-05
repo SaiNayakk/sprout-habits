@@ -7,6 +7,7 @@ import app.sprout.habits.domain.HabitEngine.Badge;
 import app.sprout.habits.domain.HabitEngine.Picture;
 import app.sprout.habits.domain.HabitEngine.Trade;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -80,12 +81,53 @@ class HabitEngineTest {
                 buy("2026-08-01", "HARBOR"),       // 100, vested (held)
                 buy("2026-09-01", "INKWELL"),      // 100, forfeited: sold within 30 days
                 sell("2026-09-15", "INKWELL"),
-                sip("2026-10-01")),                // 100 for October + 50 for the instalment, pending
+                sip("2026-10-01")),                // 100 for October + 50 for the instalment + 50 for October's PLAN_ON_TRACK, pending
                 LocalDate.parse("2026-10-07"));
-        assertThat(p.vested()).isEqualTo(100);
+        assertThat(p.vested()).as("August's month, and September's three-shares-free challenge isn't done").isEqualTo(100);
         assertThat(p.forfeited()).isEqualTo(100);
-        assertThat(p.pending()).isEqualTo(150);
+        assertThat(p.pending()).isEqualTo(200);
         assertThat(codes(p)).contains("FIRST_PLAN_INSTALMENT");
+    }
+
+    @Test
+    void challengesRewardTheHabitAndTheirPointsVestWhenTheMonthEnds() {
+        List<Trade> september = List.of(buy("2026-09-02", "HARBOR"), buy("2026-09-16", "INKWELL"), buy("2026-09-16", "KOSHA"));
+        var done = HabitEngine.challenges(september, YearMonth.of(2026, 9));
+        assertThat(done).extracting(HabitEngine.Challenge::code).containsExactly("INVEST_TWO_DAYS", "PLAN_ON_TRACK", "GROW_A_POT", "THREE_SHARES");
+        assertThat(done).filteredOn(HabitEngine.Challenge::completed).extracting(HabitEngine.Challenge::code)
+                .containsExactly("INVEST_TWO_DAYS", "THREE_SHARES");
+        var october = HabitEngine.challenges(List.of(sip("2026-10-01"), new Trade(LocalDate.parse("2026-10-01"), "SAPLING", true, false, 2,
+                2900_00, "goal:pot"), intraday("2026-10-03")), YearMonth.of(2026, 10));
+        assertThat(october).filteredOn(HabitEngine.Challenge::completed).extracting(HabitEngine.Challenge::code)
+                .as("intraday never counts").containsExactly("PLAN_ON_TRACK", "GROW_A_POT");
+        assertThat(october.get(0).progress()).isEqualTo(1);
+        // September's two challenges vest in October (100); September's month point vests too, being over 30 days held
+        Picture p = HabitEngine.picture(september, LocalDate.parse("2026-10-20"));
+        assertThat(p.vested()).isEqualTo(100 + 100);
+        assertThat(p.pending()).isZero();
+    }
+
+    @Test
+    void wrappedLooksBackOnTheYear() {
+        List<Trade> trades = new ArrayList<>();
+        for (int m = 1; m <= 10; m++) {
+            if (m != 4) {
+                trades.add(buy(String.format("2026-%02d-05", m), m % 2 == 0 ? "HARBOR" : "INKWELL"));
+            }
+        }
+        trades.add(sip("2026-10-01"));
+        trades.add(intraday("2026-10-02"));
+        var w = HabitEngine.wrapped(trades, 2026, LocalDate.parse("2026-10-20"));
+        assertThat(w.monthsInvested()).isEqualTo(9);
+        assertThat(w.longestStreak()).as("May to October").isEqualTo(6);
+        assertThat(w.purchases()).isEqualTo(10);
+        assertThat(w.topShare()).isEqualTo("HARBOR");
+        assertThat(w.topSharePurchases()).as("Feb, Jun, Aug, Oct and the October instalment").isEqualTo(5);
+        assertThat(w.planInstalments()).isEqualTo(1);
+        assertThat(w.title()).as("9 months invested").isEqualTo("The Rising Sapling");
+        assertThat(w.firstPurchaseOn()).isEqualTo(LocalDate.parse("2026-01-05"));
+        assertThat(w.badges()).contains("FIRST_INVESTMENT", "STREAK_3", "FIRST_PLAN_INSTALMENT");
+        assertThat(HabitEngine.wrapped(trades, 2025, LocalDate.parse("2026-10-20")).title()).isEqualTo("A Seed, Waiting");
     }
 
     @Test

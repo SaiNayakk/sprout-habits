@@ -28,6 +28,12 @@ public final class HabitEngine {
 
     public record Badge(String code, String name, LocalDate earnedOn) {}
 
+    public record Challenge(String code, String title, String description, int target, int progress, boolean completed, int points) {}
+
+    public record Wrapped(int year, String title, int monthsInvested, int longestStreak, int purchases, int differentShares, long investedPaise,
+                          String topShare, int topSharePurchases, int planInstalments, int potPurchases, int challengesCompleted,
+                          int pointsEarned, LocalDate firstPurchaseOn, List<String> badges) {}
+
     public record Picture(int streak, int longest, int freezes, boolean atRisk, int monthsInvested, String level, String nextLevel,
                           Integer monthsToNext, List<Badge> badges, int vested, int pending, int forfeited, boolean overtrading,
                           int monthsInvestedLast12, long investedPaise) {}
@@ -37,6 +43,7 @@ public final class HabitEngine {
     static final int AT_RISK_AFTER_DAY = 20;
     static final int POINTS_PER_MONTH = 100;
     static final int POINTS_PER_INSTALMENT = 50;
+    static final int POINTS_PER_CHALLENGE = 50;
     static final int VEST_DAYS = 30;
     static final int OVERTRADING_TRADES = 20;
     static final int OVERTRADING_DAYS = 7;   // about five sessions
@@ -190,6 +197,18 @@ public final class HabitEngine {
             }
         }
 
+        // challenges: 50 points for each completed, vested once the month is over
+        if (!trades.isEmpty()) {
+            for (YearMonth m = YearMonth.from(trades.get(0).date()); !m.isAfter(now); m = m.plusMonths(1)) {
+                int done = (int) challenges(trades, m).stream().filter(Challenge::completed).count();
+                if (m.isBefore(now)) {
+                    vested += done * POINTS_PER_CHALLENGE;
+                } else {
+                    pending += done * POINTS_PER_CHALLENGE;
+                }
+            }
+        }
+
         // a nudge, not a ban: lots of intraday or selling lately
         long busy = trades.stream().filter(t -> (t.intraday() || !t.buy()) && !t.date().isBefore(today.minusDays(OVERTRADING_DAYS))).count();
 
@@ -202,6 +221,63 @@ public final class HabitEngine {
         }
         return new Picture(streak, longest, freezes, atRisk, months, LEVELS[level], next, toNext, badges, vested, pending, forfeited,
                 busy > OVERTRADING_TRADES, last12, Math.max(0, net));
+    }
+
+    /**
+     * A month's challenges and how far along they are, from that month's trades. All four reward the
+     * habit (investing regularly, through plans and pots, spread across shares), never trading more.
+     */
+    public static List<Challenge> challenges(List<Trade> trades, YearMonth month) {
+        List<Trade> buys = trades.stream().filter(t -> t.investment() && YearMonth.from(t.date()).equals(month)).toList();
+        int days = (int) buys.stream().map(Trade::date).distinct().count();
+        int plan = (int) Math.min(1, buys.stream().filter(t -> t.tag() != null && t.tag().startsWith("sip:")).count());
+        int pot = (int) Math.min(1, buys.stream().filter(t -> t.tag() != null && t.tag().startsWith("goal:")).count());
+        int shares = (int) buys.stream().map(Trade::symbol).distinct().count();
+        return List.of(
+                challenge("INVEST_TWO_DAYS", "Two days, not one", "Invest on two different days this month.", 2, days),
+                challenge("PLAN_ON_TRACK", "Plan on track", "Your monthly plan buys this month.", 1, plan),
+                challenge("GROW_A_POT", "Grow a pot", "Something goes into one of your goals this month.", 1, pot),
+                challenge("THREE_SHARES", "Spread it out", "Buy three different shares this month.", 3, shares));
+    }
+
+    private static Challenge challenge(String code, String title, String description, int target, int progress) {
+        return new Challenge(code, title, description, target, Math.min(progress, target), progress >= target, POINTS_PER_CHALLENGE);
+    }
+
+    /** A year of investing, looked back on. */
+    public static Wrapped wrapped(List<Trade> trades, int year, LocalDate today) {
+        List<Trade> inYear = trades.stream().filter(t -> t.date().getYear() == year).toList();
+        List<Trade> buys = inYear.stream().filter(Trade::investment).toList();
+        TreeSet<YearMonth> months = new TreeSet<>();
+        buys.forEach(t -> months.add(YearMonth.from(t.date())));
+        int longest = 0;
+        int run = 0;
+        YearMonth last = null;
+        for (YearMonth m : months) {
+            run = last != null && last.plusMonths(1).equals(m) ? run + 1 : 1;
+            longest = Math.max(longest, run);
+            last = m;
+        }
+        Map<String, Integer> bySymbol = new HashMap<>();
+        buys.forEach(t -> bySymbol.merge(t.symbol(), 1, Integer::sum));
+        Map.Entry<String, Integer> top = bySymbol.entrySet().stream()
+                .max(Map.Entry.<String, Integer>comparingByValue().thenComparing(Map.Entry.comparingByKey(java.util.Comparator.reverseOrder())))
+                .orElse(null);
+        int challengesDone = 0;
+        YearMonth end = YearMonth.of(year, 12).isAfter(YearMonth.from(today)) ? YearMonth.from(today) : YearMonth.of(year, 12);
+        for (YearMonth m = YearMonth.of(year, 1); !m.isAfter(end); m = m.plusMonths(1)) {
+            challengesDone += (int) challenges(trades, m).stream().filter(Challenge::completed).count();
+        }
+        int plans = (int) buys.stream().filter(t -> t.tag() != null && t.tag().startsWith("sip:")).count();
+        int points = months.size() * POINTS_PER_MONTH + plans * POINTS_PER_INSTALMENT + challengesDone * POINTS_PER_CHALLENGE;
+        Picture p = picture(trades, today);
+        List<String> badges = p.badges().stream().filter(b -> b.earnedOn().getYear() == year).map(Badge::code).toList();
+        String title = months.size() >= 10 ? "The Steady Sprout" : months.size() >= 6 ? "The Rising Sapling"
+                : months.size() >= 1 ? "First Shoots" : "A Seed, Waiting";
+        return new Wrapped(year, title, months.size(), longest, buys.size(), bySymbol.size(),
+                buys.stream().mapToLong(Trade::valuePaise).sum(), top == null ? null : top.getKey(), top == null ? 0 : top.getValue(), plans,
+                (int) buys.stream().filter(t -> t.tag() != null && t.tag().startsWith("goal:")).count(), challengesDone, points,
+                buys.isEmpty() ? null : buys.get(0).date(), badges);
     }
 
     /** A range for how much someone has invested, never the amount. */

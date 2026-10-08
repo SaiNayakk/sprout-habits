@@ -124,8 +124,10 @@ public class HabitsController {
 
     @PostMapping("/v1/squads")
     public ResponseEntity<Map<String, Object>> createSquad(@RequestHeader(value = "X-User-Id", required = false) String user,
+                                                           @RequestHeader(value = "Idempotency-Key", required = false) String key,
                                                            @RequestBody NewSquad req) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(squad(habits.createSquad(userId(user), req.name(), req.nickname())));
+        Habits.Started s = habits.createSquad(userId(user), key, req.name(), req.nickname());
+        return ResponseEntity.status(s.created() ? HttpStatus.CREATED : HttpStatus.OK).body(squad(s.squad()));
     }
 
     @GetMapping("/v1/squads")

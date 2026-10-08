@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -30,6 +31,9 @@ public class Habits {
     public record Member(UUID userId, String nickname, int rank, int streak, int last12, String range, boolean you) {}
 
     public record Squad(UUID id, String name, String inviteCode, List<Member> members) {}
+
+    /** A new squad, and whether this call made it (or found it from an earlier call with the same key). */
+    public record Started(Squad squad, boolean created) {}
 
     public record Readiness(boolean ready, List<String> advice, Instant checkedAt) {}
 
@@ -158,7 +162,17 @@ public class Habits {
 
     // ── squads ───────────────────────────────────────────────────────────────
 
-    public Squad createSquad(UUID user, String name, String nickname) {
+    /** Starts a squad. With a key, the same customer sending it again gets the squad it made the first time. */
+    public Started createSquad(UUID user, String key, String name, String nickname) {
+        if (key != null && (key.length() < 8 || key.length() > 100)) {
+            throw new ApiException(ErrorCode.VALIDATION_FAILED, "An Idempotency-Key is 8 to 100 characters (e.g. a UUID).");
+        }
+        if (key != null) {
+            Optional<Squad> earlier = squadByKey(user, key);
+            if (earlier.isPresent()) {
+                return new Started(earlier.get(), false);
+            }
+        }
         String n = clean(name, 2, 40, "name");
         String nick = clean(nickname, 2, 24, "nickname");
         history.opened(user);
@@ -168,13 +182,20 @@ public class Habits {
             String code = code();
             try {
                 tx.executeWithoutResult(s -> {
-                    db.sql("INSERT INTO squads (id, name, invite_code, created_by, created_at) VALUES (?, ?, ?, ?, ?)")
-                            .params(id, n, code, user, Timestamp.from(now)).update();
+                    db.sql("INSERT INTO squads (id, name, invite_code, created_by, created_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?)")
+                            .params(id, n, code, user, Timestamp.from(now), key).update();
                     db.sql("INSERT INTO members (squad_id, user_id, nickname, joined_at) VALUES (?, ?, ?, ?)")
                             .params(id, user, nick, Timestamp.from(now)).update();
                 });
-                return new Squad(id, n, code, List.of());
+                return new Started(new Squad(id, n, code, List.of()), true);
             } catch (DuplicateKeyException e) {
+                // a concurrent create with the same key won; otherwise it was the invite code, so try another
+                if (key != null) {
+                    Optional<Squad> earlier = squadByKey(user, key);
+                    if (earlier.isPresent()) {
+                        return new Started(earlier.get(), false);
+                    }
+                }
                 if (attempt == 5) {
                     throw e;
                 }
@@ -241,6 +262,11 @@ public class Habits {
         if (db.sql("DELETE FROM members WHERE squad_id = ? AND user_id = ?").params(squadId, user).update() == 0) {
             throw new ApiException(ErrorCode.NOT_FOUND, "No such squad of yours.");
         }
+    }
+
+    private Optional<Squad> squadByKey(UUID user, String key) {
+        return db.sql("SELECT id, name, invite_code FROM squads WHERE created_by = ? AND idempotency_key = ?").params(user, key)
+                .query((rs, n) -> new Squad(rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), List.of())).optional();
     }
 
     private boolean isMember(UUID squadId, UUID user) {

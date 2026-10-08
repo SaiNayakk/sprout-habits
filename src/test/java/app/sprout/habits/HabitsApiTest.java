@@ -166,6 +166,29 @@ class HabitsApiTest {
     }
 
     @Test
+    void aSquadCreatedAgainWithTheSameKeyIsCreatedOnce() throws Exception {
+        UUID a = investor(100, "2026-10");
+        String req = "{\"name\":\"Retry crew\",\"nickname\":\"Asha\"}";
+        String key = UUID.randomUUID().toString();
+        JsonNode first = body(as(a, post("/v1/squads").header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(req))
+                .andExpect(status().isCreated()).andExpect(MATCHES_CONTRACT));
+        JsonNode again = body(as(a, post("/v1/squads").header("Idempotency-Key", key).contentType(MediaType.APPLICATION_JSON).content(req))
+                .andExpect(status().isOk()).andExpect(MATCHES_CONTRACT));
+        assertThat(again.path("id").asText()).isEqualTo(first.path("id").asText());
+        assertThat(again.path("inviteCode").asText()).isEqualTo(first.path("inviteCode").asText());
+        assertThat(body(as(a, get("/v1/squads"))).path("squads").size()).isEqualTo(1);
+        as(a, post("/v1/squads").header("Idempotency-Key", UUID.randomUUID().toString()).contentType(MediaType.APPLICATION_JSON).content(req))
+                .andExpect(status().isCreated());
+        assertThat(body(as(a, get("/v1/squads"))).path("squads").size()).isEqualTo(2);
+        as(a, post("/v1/squads").contentType(MediaType.APPLICATION_JSON).content(req)).andExpect(status().isCreated());
+        as(a, post("/v1/squads").contentType(MediaType.APPLICATION_JSON).content(req)).andExpect(status().isCreated());
+        assertThat(body(as(a, get("/v1/squads"))).path("squads").size()).isEqualTo(4);
+        as(a, post("/v1/squads").header("Idempotency-Key", "short").contentType(MediaType.APPLICATION_JSON).content(req))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
+        assertThat(body(as(a, get("/v1/squads"))).path("squads").size()).isEqualTo(4);
+    }
+
+    @Test
     void aSquadIsLimitedInSizeAndAnyoneCanLeave() throws Exception {
         UUID a = investor(100, "2026-10");
         JsonNode s = body(as(a, post("/v1/squads").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Trio\",\"nickname\":\"Asha\"}")));
